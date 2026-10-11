@@ -97,6 +97,8 @@ function runCSA({
   routes,
   stopsMap
 }) {
+  console.log('CSA IS RUNNING');
+
   const originStops = findNearbyStops(
     origin.lat,
     origin.lng,
@@ -120,307 +122,467 @@ function runCSA({
 
   const connections = buildConnections(routes);
 
-  const arrivalTimes = new Map();
-  const reachedTrips = new Map();
-  const predecessor = new Map();
+  console.log('Connections:', connections.length);
 
-  for (const stopId of stopsMap.keys()) {
-    arrivalTimes.set(stopId, Infinity);
-  }
+  const options = [];
 
-  for (const connection of connections) {
-    reachedTrips.set(connection.tripId, false);
-  }
+  /*
+    Run a separate CSA scan for each route.
 
-  for (const stop of originStops) {
-    const arrival =
-      departureTimeMins + stop.walkTimeMins;
-
-    if (arrival < arrivalTimes.get(stop.id)) {
-      arrivalTimes.set(stop.id, arrival);
-
-      predecessor.set(stop.id, {
-        type: 'ORIGIN_WALK',
-        stop
-      });
-    }
-  }
-
-  const destinationStopIds =
-    new Set(destinationStops.map(stop => stop.id));
-
-  let bestDestinationArrival = Infinity;
-  let bestDestinationStop = null;
-
-  for (const connection of connections) {
-    if (connection.depTime < departureTimeMins) {
-      continue;
-    }
-
-    if (
-      bestDestinationArrival !== Infinity &&
-      connection.depTime >= bestDestinationArrival
-    ) {
-      break;
-    }
-
-    const tripAlreadyReached =
-      reachedTrips.get(connection.tripId);
-
-    const canReachDeparture =
-      arrivalTimes.get(connection.depStopId) <=
-      connection.depTime;
-
-    if (!tripAlreadyReached && !canReachDeparture) {
-      continue;
-    }
-
-    reachedTrips.set(connection.tripId, true);
-
-    if (
-      connection.arrTime <
-      arrivalTimes.get(connection.arrStopId)
-    ) {
-      arrivalTimes.set(
-        connection.arrStopId,
-        connection.arrTime
+    This lets the frontend receive multiple choices,
+    similar to your friend's current RAPTOR version,
+    while the route computation still uses a
+    departure-time-sorted connection scan.
+  */
+  for (const route of routes) {
+    const routeConnections =
+      connections.filter(
+        connection =>
+          connection.routeId === route.id
       );
 
-      predecessor.set(
-        connection.arrStopId,
-        connection
+    if (routeConnections.length === 0) {
+      continue;
+    }
+
+    const originStopsOnRoute =
+      originStops.filter(stop =>
+        route.stops.some(
+          routeStop => routeStop.id === stop.id
+        )
+      );
+
+    const destinationStopsOnRoute =
+      destinationStops.filter(stop =>
+        route.stops.some(
+          routeStop => routeStop.id === stop.id
+        )
+      );
+
+    if (
+      originStopsOnRoute.length === 0 ||
+      destinationStopsOnRoute.length === 0
+    ) {
+      continue;
+    }
+
+    const arrivalTimes = new Map();
+    const reachedTrips = new Map();
+    const predecessor = new Map();
+
+    for (const stop of route.stops) {
+      arrivalTimes.set(stop.id, Infinity);
+    }
+
+    for (const connection of routeConnections) {
+      reachedTrips.set(
+        connection.tripId,
+        false
+      );
+    }
+
+    /*
+      Initialize reachable origin-side stops.
+    */
+    for (const stop of originStopsOnRoute) {
+      const arrival =
+        departureTimeMins +
+        stop.walkTimeMins;
+
+      if (
+        arrival <
+        arrivalTimes.get(stop.id)
+      ) {
+        arrivalTimes.set(
+          stop.id,
+          arrival
+        );
+
+        predecessor.set(
+          stop.id,
+          {
+            type: 'ORIGIN_WALK',
+            stop
+          }
+        );
+      }
+    }
+
+    const destinationStopIds =
+      new Set(
+        destinationStopsOnRoute.map(
+          stop => stop.id
+        )
+      );
+
+    let bestDestinationArrival =
+      Infinity;
+
+    let bestDestinationStop = null;
+
+    /*
+      CSA CONNECTION SCAN
+    */
+    for (const connection of routeConnections) {
+      if (
+        connection.depTime <
+        departureTimeMins
+      ) {
+        continue;
+      }
+
+      if (
+        bestDestinationArrival !== Infinity &&
+        connection.depTime >=
+          bestDestinationArrival
+      ) {
+        break;
+      }
+
+      const tripAlreadyReached =
+        reachedTrips.get(
+          connection.tripId
+        );
+
+      const canReachDeparture =
+        arrivalTimes.get(
+          connection.depStopId
+        ) <= connection.depTime;
+
+      if (
+        !tripAlreadyReached &&
+        !canReachDeparture
+      ) {
+        continue;
+      }
+
+      reachedTrips.set(
+        connection.tripId,
+        true
       );
 
       if (
-        destinationStopIds.has(
+        connection.arrTime <
+        arrivalTimes.get(
           connection.arrStopId
         )
       ) {
-        const destinationStop =
-          destinationStops.find(
-            stop =>
-              stop.id ===
-              connection.arrStopId
-          );
+        arrivalTimes.set(
+          connection.arrStopId,
+          connection.arrTime
+        );
 
-        const finalArrival =
-          connection.arrTime +
-          destinationStop.walkTimeMins;
+        predecessor.set(
+          connection.arrStopId,
+          connection
+        );
 
         if (
-          finalArrival <
-          bestDestinationArrival
+          destinationStopIds.has(
+            connection.arrStopId
+          )
         ) {
-          bestDestinationArrival =
-            finalArrival;
+          const destinationStop =
+            destinationStopsOnRoute.find(
+              stop =>
+                stop.id ===
+                connection.arrStopId
+            );
 
-          bestDestinationStop =
-            destinationStop;
+          const finalArrival =
+            connection.arrTime +
+            destinationStop.walkTimeMins;
+
+          if (
+            finalArrival <
+            bestDestinationArrival
+          ) {
+            bestDestinationArrival =
+              finalArrival;
+
+            bestDestinationStop =
+              destinationStop;
+          }
         }
       }
     }
-  }
 
-  if (
-    bestDestinationArrival === Infinity ||
-    !bestDestinationStop
-  ) {
-    return { options: [] };
-  }
-
-  const transitConnections = [];
-
-  let currentStopId =
-    bestDestinationStop.id;
-
-  while (predecessor.has(currentStopId)) {
-    const prev =
-      predecessor.get(currentStopId);
-
-    if (prev.type === 'ORIGIN_WALK') {
-      break;
+    if (
+      bestDestinationArrival === Infinity ||
+      !bestDestinationStop
+    ) {
+      continue;
     }
 
-    transitConnections.unshift(prev);
+    /*
+      Reconstruct the connection sequence.
+    */
+    const transitConnections = [];
 
-    currentStopId = prev.depStopId;
-  }
+    let currentStopId =
+      bestDestinationStop.id;
 
-  if (transitConnections.length === 0) {
-    return { options: [] };
-  }
-
-  const firstConnection =
-    transitConnections[0];
-
-  const lastConnection =
-    transitConnections[
-      transitConnections.length - 1
-    ];
-
-  const boardStop =
-    stopsMap.get(firstConnection.depStopId);
-
-  const alightStop =
-    stopsMap.get(lastConnection.arrStopId);
-
-  const originStop =
-    originStops.find(
-      stop => stop.id === boardStop.id
-    );
-
-  const firstDeparture =
-    firstConnection.depTime;
-
-  const transitArrival =
-    lastConnection.arrTime;
-
-  const walkToStopMins =
-    originStop?.walkTimeMins || 0;
-
-  const walkToDestMins =
-    bestDestinationStop.walkTimeMins;
-
-  const totalDuration =
-    bestDestinationArrival -
-    departureTimeMins;
-
-  const usedRouteIds = [
-    ...new Set(
-      transitConnections.map(c => c.routeId)
-    )
-  ];
-
-  const transitLegs = [];
-
-  let currentLeg = null;
-
-  for (const connection of transitConnections) {
-    if (
-      !currentLeg ||
-      currentLeg.tripId !== connection.tripId
+    while (
+      predecessor.has(currentStopId)
     ) {
-      if (currentLeg) {
-        transitLegs.push(currentLeg);
+      const previous =
+        predecessor.get(
+          currentStopId
+        );
+
+      if (
+        previous.type ===
+        'ORIGIN_WALK'
+      ) {
+        break;
       }
 
-      currentLeg = {
-        type: 'TRANSIT',
-        tripId: connection.tripId,
-        routeNumber: connection.routeId,
-        routeName: connection.routeName,
-        color: connection.routeColor,
-        fromStop:
-          stopsMap.get(connection.depStopId)?.name,
-        toStop:
-          stopsMap.get(connection.arrStopId)?.name,
-        boardTimeStr:
-          minsToTimeStr(connection.depTime),
-        alightTimeStr:
-          minsToTimeStr(connection.arrTime),
-        duration:
-          connection.arrTime -
-          connection.depTime,
-        pathPoints:
-          connection.route.allPathPoints
-      };
-    } else {
-      currentLeg.toStop =
-        stopsMap.get(connection.arrStopId)?.name;
+      transitConnections.unshift(
+        previous
+      );
 
-      currentLeg.alightTimeStr =
-        minsToTimeStr(connection.arrTime);
+      currentStopId =
+        previous.depStopId;
+    }
 
-      currentLeg.duration =
-        connection.arrTime -
-        firstConnection.depTime;
+    if (
+      transitConnections.length === 0
+    ) {
+      continue;
+    }
+
+    const firstConnection =
+      transitConnections[0];
+
+    const lastConnection =
+      transitConnections[
+        transitConnections.length - 1
+      ];
+
+    const boardStop =
+      stopsMap.get(
+        firstConnection.depStopId
+      );
+
+    const alightStop =
+      stopsMap.get(
+        lastConnection.arrStopId
+      );
+
+    if (!boardStop || !alightStop) {
+      continue;
+    }
+
+    const originStop =
+      originStopsOnRoute.find(
+        stop =>
+          stop.id ===
+          boardStop.id
+      );
+
+    if (!originStop) {
+      continue;
+    }
+
+    const walkToStopMins =
+      originStop.walkTimeMins;
+
+    const walkToDestMins =
+      bestDestinationStop.walkTimeMins;
+
+    const firstDeparture =
+      firstConnection.depTime;
+
+    const lastArrival =
+      lastConnection.arrTime;
+
+    const rideDuration =
+      lastArrival -
+      firstDeparture;
+
+    const totalDuration =
+      bestDestinationArrival -
+      departureTimeMins;
+
+    const isActiveNow =
+      departureTimeMins >=
+        route.startMins &&
+      departureTimeMins <=
+        route.endMins;
+
+    options.push({
+      primaryRouteNumber:
+        route.id,
+
+      primaryRouteName:
+        route.name,
+
+      primaryColor:
+        route.color ||
+        '#ff8300',
+
+      totalDuration,
+
+      isActiveNow,
+
+      operatingHours:
+        `${minsToTimeStr(
+          route.startMins
+        )} - ${minsToTimeStr(
+          route.endMins
+        )}`,
+
+      nextDepartureStr:
+        minsToTimeStr(
+          firstDeparture
+        ),
+
+      arrivalTimeStr:
+        minsToTimeStr(
+          bestDestinationArrival
+        ),
+
+      boardStopId:
+        boardStop.id,
+
+      alightStopId:
+        alightStop.id,
+
+      allRouteStops:
+        route.stops,
+
+      allPathPoints:
+        route.allPathPoints,
+
+      transfers: 0,
+
+      legs: [
+        {
+          type: 'WALK',
+          from:
+            origin.label ||
+            'Starting Location',
+          to:
+            boardStop.name,
+          duration:
+            walkToStopMins,
+          dist:
+            originStop.distanceMeters
+        },
+
+        {
+          type: 'TRANSIT',
+          routeNumber:
+            route.id,
+          routeName:
+            route.name,
+          color:
+            route.color ||
+            '#ff8300',
+          fromStop:
+            boardStop.name,
+          toStop:
+            alightStop.name,
+          boardTimeStr:
+            minsToTimeStr(
+              firstDeparture
+            ),
+          alightTimeStr:
+            minsToTimeStr(
+              lastArrival
+            ),
+          duration:
+            rideDuration,
+          pathPoints:
+            route.allPathPoints
+        },
+
+        {
+          type: 'WALK',
+          from:
+            alightStop.name,
+          to:
+            destination.label ||
+            'Destination Location',
+          duration:
+            walkToDestMins,
+          dist:
+            bestDestinationStop
+              .distanceMeters
+        }
+      ]
+    });
+  }
+
+  /*
+    Same behavior as your friend's version:
+    one option per unique route.
+  */
+  const uniqueOptionsMap =
+    new Map();
+
+  for (const option of options) {
+    const key =
+      option.primaryRouteNumber;
+
+    if (
+      !uniqueOptionsMap.has(key)
+    ) {
+      uniqueOptionsMap.set(
+        key,
+        option
+      );
+
+      continue;
+    }
+
+    const existing =
+      uniqueOptionsMap.get(key);
+
+    if (
+      !existing.isActiveNow &&
+      option.isActiveNow
+    ) {
+      uniqueOptionsMap.set(
+        key,
+        option
+      );
+    } else if (
+      existing.isActiveNow ===
+        option.isActiveNow &&
+      option.totalDuration <
+        existing.totalDuration
+    ) {
+      uniqueOptionsMap.set(
+        key,
+        option
+      );
     }
   }
 
-  if (currentLeg) {
-    transitLegs.push(currentLeg);
-  }
-
-  const legs = [
-    {
-      type: 'WALK',
-      from:
-        origin.label ||
-        'Starting Location',
-      to: boardStop.name,
-      duration: walkToStopMins,
-      dist:
-        originStop?.distanceMeters || 0
-    },
-    ...transitLegs,
-    {
-      type: 'WALK',
-      from: alightStop.name,
-      to:
-        destination.label ||
-        'Destination Location',
-      duration: walkToDestMins,
-      dist:
-        bestDestinationStop.distanceMeters
-    }
-  ];
-
-  const mainRoute =
-    routes.find(
-      route =>
-        route.id === firstConnection.routeId
+  /*
+    Same sorting behavior as RAPTOR version:
+    active routes first,
+    then shortest total duration.
+  */
+  const sortedOptions =
+    Array.from(
+      uniqueOptionsMap.values()
+    ).sort(
+      (a, b) =>
+        (b.isActiveNow -
+          a.isActiveNow) ||
+        (a.totalDuration -
+          b.totalDuration)
     );
+
+  console.log(
+    'CSA options:',
+    sortedOptions.length
+  );
 
   return {
-    options: [
-      {
-        primaryRouteNumber:
-          usedRouteIds.join(' → '),
-
-        primaryRouteName:
-          mainRoute?.name ||
-          firstConnection.routeName,
-
-        primaryColor:
-          mainRoute?.color ||
-          '#ff8300',
-
-        totalDuration,
-
-        isActiveNow: true,
-
-        operatingHours:
-          mainRoute?.operatingHours || '',
-
-        nextDepartureStr:
-          minsToTimeStr(firstDeparture),
-
-        arrivalTimeStr:
-          minsToTimeStr(
-            bestDestinationArrival
-          ),
-
-        boardStopId:
-          boardStop.id,
-
-        alightStopId:
-          alightStop.id,
-
-        allRouteStops:
-          mainRoute?.stops || [],
-
-        allPathPoints:
-          mainRoute?.allPathPoints || [],
-
-        transfers:
-          Math.max(
-            0,
-            usedRouteIds.length - 1
-          ),
-
-        legs
-      }
-    ]
+    options: sortedOptions
   };
 }
 
