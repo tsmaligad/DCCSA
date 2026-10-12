@@ -537,7 +537,7 @@ export default function App() {
           </div>
           <div>
             <h1 style={{ fontSize: '1.1rem', fontWeight: '700', color: '#0f172a', margin: 0, letterSpacing: '-0.02em' }}>
-              Transit Network
+              CSA Transit Network
             </h1>
             <p style={{ fontSize: '0.75rem', color: '#64748b', margin: 0 }}>Trip planning & route directory</p>
           </div>
